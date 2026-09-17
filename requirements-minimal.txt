@@ -1,0 +1,4 @@
+# The smallest install that runs every feature, using built-in fallbacks for
+# PostgreSQL, ChromaDB, Redis, Celery, LangGraph and the model API.
+streamlit>=1.50
+pytest>=8.0.0
