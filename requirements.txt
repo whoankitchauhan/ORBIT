@@ -1,0 +1,32 @@
+# ORBIT — Orchestrated Reasoning & Behavioral Intelligence Technology
+#
+# Only Streamlit is strictly required. Everything else upgrades a component
+# that already has a working built-in fallback, so `pip install streamlit`
+# alone is enough to run the full demonstration.
+
+# --- required -------------------------------------------------------------
+streamlit>=1.50                 # console UI (uses the width= API)
+
+# --- reasoning: pick one, or neither for the offline planner --------------
+anthropic>=0.40.0
+openai>=1.50.0
+
+# --- orchestration --------------------------------------------------------
+langgraph>=0.2.50               # optional; the built-in engine stands in
+langchain-core>=0.3.0
+
+# --- persistence ----------------------------------------------------------
+psycopg[binary]>=3.2            # PostgreSQL; SQLite is used without it
+chromadb>=0.5.0                 # vector store; embedded index is used without it
+
+# --- asynchronous execution ----------------------------------------------
+celery>=5.4.0
+redis>=5.0.0
+
+# --- API layer ------------------------------------------------------------
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.9.0
+
+# --- development ----------------------------------------------------------
+pytest>=8.0.0
