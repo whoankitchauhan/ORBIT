@@ -1,0 +1,16 @@
+# Streamlit theming. The CSS in frontend/theme.py does the detailed work;
+# these values make the chrome Streamlit draws itself match it.
+[theme]
+base = "light"
+primaryColor = "#0E7C86"
+backgroundColor = "#EEF1F5"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#16233A"
+font = "sans serif"
+
+[server]
+headless = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
