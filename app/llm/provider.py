@@ -278,11 +278,34 @@ class LLMClient:
                 text = offline.respond(task, prompt, context or {})
                 model = "orbit-offline-planner"
         except Exception as exc:  # network down, bad key, rate limit
-            # Falling back keeps a live demo alive rather than dropping the
-            # whole workflow because one call failed.
-            text = offline.respond(task, prompt, context or {})
-            provider, model = "simulated", "orbit-offline-planner"
-            text = f"{text}\n\n[fallback: {type(exc).__name__}]"
+            # Try alternate real providers before falling back to the offline planner.
+            # Falling back to simulated mode silently is the most dangerous failure
+            # mode: it produces plausible-looking but heuristic output.
+            _primary_exc = exc
+            _fell_back_to_real = False
+
+            # If primary was Gemini but Groq key is present, try Groq
+            if provider == "gemini" and settings.groq_api_key:
+                try:
+                    text, usage = self._groq(system, prompt)
+                    provider, model = "groq", settings.groq_model
+                    _fell_back_to_real = True
+                except Exception:
+                    pass
+
+            # If still failed and Gemini key is available, try other models
+            if not _fell_back_to_real and provider == "groq" and settings.gemini_api_key:
+                try:
+                    text, usage = self._gemini(system, prompt)
+                    provider, model = "gemini", settings.gemini_model
+                    _fell_back_to_real = True
+                except Exception:
+                    pass
+
+            if not _fell_back_to_real:
+                text = offline.respond(task, prompt, context or {})
+                provider, model = "simulated", "orbit-offline-planner"
+                text = f"{text}\n\n[fallback: {type(_primary_exc).__name__}]"
 
         latency = int((time.perf_counter() - started) * 1000)
         return LLMResponse(
