@@ -15,17 +15,23 @@ from __future__ import annotations
 import argparse
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from app import runtime
 from app.config import settings
 from app.graph.state import OrbitState
 
 
 def _rule(title: str) -> None:
-    print(f"\n{title}\n{'─' * max(len(title), 60)}")
+    print(f"\n{title}\n{'-' * max(len(title), 60)}")
 
 
 def show(state: OrbitState) -> None:
-    _rule(f"{state.task_id} · {state.status}")
+    _rule(f"{state.task_id} - {state.status}")
 
     print("Plan")
     for step in state.plan:
