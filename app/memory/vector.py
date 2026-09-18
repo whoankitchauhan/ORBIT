@@ -187,6 +187,26 @@ class EmbeddedVectorIndex:
     def count(self) -> int:
         return len(self._records)
 
+    def delete(self, ids: list[str]) -> None:
+        """Remove records by their IDs."""
+        with self._lock:
+            for record_id in ids:
+                self._records.pop(record_id, None)
+            self._persist()
+
+    def delete_by_kind(self, kind: str) -> int:
+        """Delete all records of a given kind. Returns the number removed."""
+        with self._lock:
+            to_remove = [
+                rid for rid, rec in self._records.items()
+                if rec.get("metadata", {}).get("kind") == kind
+            ]
+            for rid in to_remove:
+                del self._records[rid]
+            if to_remove:
+                self._persist()
+        return len(to_remove)
+
     def clear(self) -> None:
         with self._lock:
             self._records = {}
@@ -337,6 +357,25 @@ class VectorMemory:
                 return 0
         assert self._index is not None
         return self._index.count()
+
+    def delete_episodes(self) -> int:
+        """Remove all episodic memory records. Returns count removed.
+
+        Episodes are full task-outcome summaries that were written during runs.
+        Clearing them is safe: the knowledge base (policies, documents) is
+        not affected.
+        """
+        if self.backend == "chromadb":
+            try:
+                result = self._collection.get(where={"kind": "episode"})
+                ids = result.get("ids", [])
+                if ids:
+                    self._collection.delete(ids=ids)
+                return len(ids)
+            except Exception:
+                return 0
+        assert self._index is not None
+        return self._index.delete_by_kind("episode")
 
     def clear(self) -> None:
         if self.backend == "chromadb":
