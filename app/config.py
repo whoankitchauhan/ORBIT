@@ -97,6 +97,13 @@ class Settings:
     openrouter_model: str = field(
         default_factory=lambda: os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
     )
+    # Local / Offline Ollama provider
+    ollama_base_url: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    )
+    ollama_model: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_MODEL", "gemma3:4b")
+    )
     openai_base_url: str = field(
         default_factory=lambda: os.getenv("OPENAI_BASE_URL", os.getenv("LOCAL_LLM_URL", ""))
     )
@@ -169,6 +176,21 @@ class Settings:
         return bool(self.xai_api_key)
 
     @property
+    def has_ollama(self) -> bool:
+        if not self.ollama_base_url:
+            return False
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"{self.ollama_base_url.rstrip('/')}/api/tags",
+                headers={"User-Agent": "ORBIT/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    @property
     def has_openrouter(self) -> bool:
         return bool(self.openrouter_api_key)
 
@@ -191,7 +213,8 @@ class Settings:
     @property
     def has_live_llm(self) -> bool:
         return (
-            self.has_gemini
+            self.has_ollama
+            or self.has_gemini
             or self.has_groq
             or self.has_xai
             or self.has_openrouter
@@ -233,6 +256,8 @@ class Settings:
     def resolved_llm_provider(self) -> str:
         """Which LLM backend will actually answer a call."""
         choice = (self.llm_provider or "auto").lower()
+        if choice in {"ollama", "local", "gemma"} and self.has_ollama:
+            return "ollama"
         if choice in {"gemini", "google"} and self.has_gemini:
             return "gemini"
         if choice == "groq" and self.has_groq:
@@ -241,7 +266,7 @@ class Settings:
             return "xai"
         if choice == "openrouter" and self.has_openrouter:
             return "openrouter"
-        if choice in {"openai_compatible", "local", "ollama"} and self.has_openai_compatible:
+        if choice in {"openai_compatible"} and self.has_openai_compatible:
             return "openai_compatible"
         if choice == "anthropic" and self.has_anthropic:
             return "anthropic"
@@ -250,6 +275,8 @@ class Settings:
         if choice == "simulated":
             return "simulated"
         if choice == "auto":
+            if self.has_ollama:
+                return "ollama"
             if self.has_gemini:
                 return "gemini"
             if self.has_groq:
@@ -274,6 +301,7 @@ class Settings:
         """
         provider = self.resolved_llm_provider()
         llm_detail_map = {
+            "ollama": f"Ollama Local (Offline) · {self.ollama_model}",
             "gemini": f"Google Gemini (Free tier) · {self.gemini_model}",
             "groq": f"Groq (Free tier) · {self.groq_model}",
             "xai": f"xAI / Grok · {self.xai_model}",
