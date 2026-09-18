@@ -74,17 +74,49 @@ class Settings:
     version: str = "1.0.0"
 
     # --- LLM ------------------------------------------------------------
+    # Free / Free-tier providers (primary)
+    gemini_api_key: str = field(
+        default_factory=lambda: os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    )
+    gemini_model: str = field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    )
+    groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
+    groq_model: str = field(
+        default_factory=lambda: os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    )
+    xai_api_key: str = field(
+        default_factory=lambda: os.getenv("XAI_API_KEY", os.getenv("GROK_API_KEY", ""))
+    )
+    xai_model: str = field(
+        default_factory=lambda: os.getenv("XAI_MODEL", os.getenv("GROK_MODEL", "grok-2-latest"))
+    )
+    openrouter_api_key: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_API_KEY", "")
+    )
+    openrouter_model: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    )
+    openai_base_url: str = field(
+        default_factory=lambda: os.getenv("OPENAI_BASE_URL", os.getenv("LOCAL_LLM_URL", ""))
+    )
+
+    # Legacy / optional paid providers
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     anthropic_model: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
     )
     openai_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+
     llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "auto"))
     llm_temperature: float = field(
         default_factory=lambda: float(os.getenv("LLM_TEMPERATURE", "0.2"))
     )
     llm_max_tokens: int = field(default_factory=lambda: int(os.getenv("LLM_MAX_TOKENS", "1200")))
+
+    # --- search & tools -------------------------------------------------
+    tavily_api_key: str = field(default_factory=lambda: os.getenv("TAVILY_API_KEY", ""))
 
     # --- structured store -----------------------------------------------
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", ""))
@@ -125,6 +157,30 @@ class Settings:
     # ------------------------------------------------------------------
 
     @property
+    def has_gemini(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    @property
+    def has_groq(self) -> bool:
+        return bool(self.groq_api_key)
+
+    @property
+    def has_xai(self) -> bool:
+        return bool(self.xai_api_key)
+
+    @property
+    def has_openrouter(self) -> bool:
+        return bool(self.openrouter_api_key)
+
+    @property
+    def has_openai_compatible(self) -> bool:
+        return bool(self.openai_base_url)
+
+    @property
+    def has_tavily(self) -> bool:
+        return bool(self.tavily_api_key)
+
+    @property
     def has_anthropic(self) -> bool:
         return bool(self.anthropic_api_key) and _module_available("anthropic")
 
@@ -134,7 +190,15 @@ class Settings:
 
     @property
     def has_live_llm(self) -> bool:
-        return self.has_anthropic or self.has_openai
+        return (
+            self.has_gemini
+            or self.has_groq
+            or self.has_xai
+            or self.has_openrouter
+            or self.has_openai_compatible
+            or self.has_anthropic
+            or self.has_openai
+        )
 
     @property
     def has_postgres(self) -> bool:
@@ -169,6 +233,16 @@ class Settings:
     def resolved_llm_provider(self) -> str:
         """Which LLM backend will actually answer a call."""
         choice = (self.llm_provider or "auto").lower()
+        if choice in {"gemini", "google"} and self.has_gemini:
+            return "gemini"
+        if choice == "groq" and self.has_groq:
+            return "groq"
+        if choice in {"xai", "grok"} and self.has_xai:
+            return "xai"
+        if choice == "openrouter" and self.has_openrouter:
+            return "openrouter"
+        if choice in {"openai_compatible", "local", "ollama"} and self.has_openai_compatible:
+            return "openai_compatible"
         if choice == "anthropic" and self.has_anthropic:
             return "anthropic"
         if choice == "openai" and self.has_openai:
@@ -176,6 +250,16 @@ class Settings:
         if choice == "simulated":
             return "simulated"
         if choice == "auto":
+            if self.has_gemini:
+                return "gemini"
+            if self.has_groq:
+                return "groq"
+            if self.has_xai:
+                return "xai"
+            if self.has_openrouter:
+                return "openrouter"
+            if self.has_openai_compatible:
+                return "openai_compatible"
             if self.has_anthropic:
                 return "anthropic"
             if self.has_openai:
@@ -189,14 +273,29 @@ class Settings:
         knows whether a result came from a real model or the offline planner.
         """
         provider = self.resolved_llm_provider()
+        llm_detail_map = {
+            "gemini": f"Google Gemini (Free tier) · {self.gemini_model}",
+            "groq": f"Groq (Free tier) · {self.groq_model}",
+            "xai": f"xAI / Grok · {self.xai_model}",
+            "openrouter": f"OpenRouter · {self.openrouter_model}",
+            "openai_compatible": f"Local / Custom LLM · {self.openai_model}",
+            "anthropic": f"Anthropic · {self.anthropic_model}",
+            "openai": f"OpenAI · {self.openai_model}",
+            "simulated": "Offline planner (no API key set)",
+        }
+        search_detail = (
+            "Tavily (Free tier)"
+            if self.has_tavily
+            else ("DuckDuckGo (Free web)" if self.allow_live_web_search else "Disabled (offline safe)")
+        )
         return {
             "Reasoning": {
                 "mode": "live" if provider != "simulated" else "fallback",
-                "detail": {
-                    "anthropic": f"Anthropic · {self.anthropic_model}",
-                    "openai": f"OpenAI · {self.openai_model}",
-                    "simulated": "Offline planner (no API key set)",
-                }[provider],
+                "detail": llm_detail_map.get(provider, "Offline planner"),
+            },
+            "Web search": {
+                "mode": "live" if (self.has_tavily or self.allow_live_web_search) else "fallback",
+                "detail": search_detail,
             },
             "Orchestration": {
                 "mode": "live" if self.has_langgraph else "fallback",
