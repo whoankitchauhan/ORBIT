@@ -66,13 +66,22 @@ gate"** on the Mission tab, and press **Run workflow**.
 No API key, database or message broker is needed to run any of this. See
 *Graceful degradation* below.
 
-### Optional: live model reasoning
+### Optional: live model reasoning & web search (Free & Free-Tier APIs)
 
 ```bash
 cp .env.example .env
-# add ANTHROPIC_API_KEY=... or OPENAI_API_KEY=...
+# Set any free API key in .env (e.g., GEMINI_API_KEY, GROQ_API_KEY, TAVILY_API_KEY)
 pip install -r requirements.txt
 ```
+
+Supported free and free-tier providers:
+- **Google Gemini** (`GEMINI_API_KEY`): Generous free tier (up to 15 RPM / 1M TPM) for `gemini-2.0-flash`.
+- **Groq** (`GROQ_API_KEY`): Ultra-fast free tier for `llama-3.3-70b-versatile`.
+- **xAI / Grok** (`XAI_API_KEY`): OpenAI-compatible reasoning with `grok-2-latest`.
+- **OpenRouter** (`OPENROUTER_API_KEY`): Free models tagged with `:free`.
+- **Local / OpenAI-compatible** (`OPENAI_BASE_URL`): Ollama, LM Studio, vLLM (100% free and local).
+- **Tavily AI Search** (`TAVILY_API_KEY`): 1,000 free searches/month for agentic web research.
+- **Legacy Paid Providers** (optional): Anthropic Claude, OpenAI.
 
 ---
 
@@ -85,7 +94,8 @@ whether a result came from a real model or the offline planner.
 
 | Component | Used when available | Fallback |
 |---|---|---|
-| Reasoning | Anthropic / OpenAI | Rule-based offline planner |
+| Reasoning | Gemini / Groq / Grok / OpenRouter / Anthropic / OpenAI | Rule-based offline planner |
+| Web search | Tavily AI Search (Free tier) / DuckDuckGo | Disabled (offline safe) |
 | Orchestration | LangGraph | Built-in graph engine (`app/graph/engine.py`) |
 | Structured store | PostgreSQL | SQLite at `data/orbit.db` |
 | Semantic memory | ChromaDB | Embedded vector index |
