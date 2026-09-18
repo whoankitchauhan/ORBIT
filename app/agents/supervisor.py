@@ -167,15 +167,21 @@ class SupervisorAgent(Agent):
         started = time.perf_counter()
         approval = state.approval.to_dict() if state.approval else None
 
+        # Truncate long sections so the synthesis prompt stays within model token limits.
+        # The research summary can be very large when web search results are included.
+        research_summary = (state.research.get("summary", "(none)") or "(none)")[:2000]
+        analysis_summary = (state.analysis.get("summary", "(none)") or "(none)")[:800]
+        validation_notes = state.validation.get("notes", "(none)") or "(none)"
+        validation_issues = state.validation.get("issues", [])
+
         prompt = (
             f"Objective: {state.objective}\n\n"
-            f"Research: {state.research.get('summary', '(none)')}\n\n"
-            f"Analysis: {state.analysis.get('summary', '(none)')}\n\n"
-            f"Validation: {state.validation.get('notes', '(none)')} "
-            f"(issues: {state.validation.get('issues', [])})\n\n"
+            f"Research findings:\n{research_summary}\n\n"
+            f"Analysis conclusion:\n{analysis_summary}\n\n"
+            f"Validation: {validation_notes} (issues: {validation_issues})\n\n"
             f"Action result: {state.action_result or '(no action taken)'}\n\n"
             f"Human decision: {approval or '(no approval was required)'}\n\n"
-            "Write the final response for the user."
+            "Write the final response for the user. Be direct and informative."
         )
         response = self.llm.complete(
             prompt,
@@ -199,6 +205,7 @@ class SupervisorAgent(Agent):
             provider=response.provider,
             latency_ms=latency,
         )
+
 
     def run(self, state: OrbitState, **kwargs: Any) -> AgentResult:
         return self.plan(state)
