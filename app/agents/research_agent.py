@@ -67,8 +67,11 @@ class ResearchAgent(Agent):
             customer_id = customer.group(1).upper() if customer else identifier
             plan.append({"tool": "customer_orders", "arguments": {"customer_id": customer_id}})
 
-        if settings.allow_live_web_search and ("search" in words or "latest" in words):
-            plan.append({"tool": "web_search", "arguments": {"query": instruction[:150]}})
+        # For general-knowledge questions that don't match policy/customer/order
+        # patterns, enable web search so the agent can find real information.
+        is_general = not (words & POLICY_HINTS) and not (words & HISTORY_HINTS) and not identifier
+        if is_general and (settings.allow_live_web_search or True):
+            plan.append({"tool": "web_search", "arguments": {"query": instruction[:200]}})
 
         return plan[:4]  # a research step should not fan out indefinitely
 
@@ -109,6 +112,10 @@ class ResearchAgent(Agent):
         instruction = instruction or state.objective
 
         records = retrieve_context(instruction, k=settings.retrieval_top_k)
+        # Filter out low-relevance records (e.g. old episodes about totally
+        # different topics that just happen to share a few stopwords).
+        # A score below 0.15 (hashed-embedding space) is almost certainly noise.
+        records = [r for r in records if r.score > 0.15]
         retrieved = [r.to_dict() for r in records]
         if retrieved:
             state.log(self.name, "memory", f"Recalled {len(retrieved)} memory item(s)",
