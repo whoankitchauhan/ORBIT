@@ -74,6 +74,126 @@ class LLMClient:
 
     # ----------------------------------------------------------- backends
 
+    def _gemini(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        import urllib.request
+
+        model = settings.gemini_model
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            f"?key={settings.gemini_api_key}"
+        )
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": settings.llm_temperature,
+                "maxOutputTokens": settings.llm_max_tokens,
+            },
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "ORBIT/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=settings.tool_timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise LLMError("Gemini API returned no completion candidates")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts)
+        usage_meta = data.get("usageMetadata", {})
+        usage = {
+            "input_tokens": usage_meta.get("promptTokenCount", 0),
+            "output_tokens": usage_meta.get("candidatesTokenCount", 0),
+        }
+        return text, usage
+
+    def _http_chat(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        system: str,
+        prompt: str,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[str, dict[str, int]]:
+        """Generic OpenAI-compatible HTTP completion with zero hard package dependencies."""
+        import urllib.request
+
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key or 'dummy-key'}",
+            "User-Agent": "ORBIT/1.0",
+            **(extra_headers or {}),
+        }
+        body = {
+            "model": model,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(req, timeout=settings.tool_timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        choices = data.get("choices", [])
+        if not choices:
+            raise LLMError(f"API returned no completion choices from {base_url}")
+        text = choices[0].get("message", {}).get("content") or ""
+        usage = {
+            "input_tokens": data.get("usage", {}).get("prompt_tokens", 0),
+            "output_tokens": data.get("usage", {}).get("completion_tokens", 0),
+        }
+        return text, usage
+
+    def _groq(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        return self._http_chat(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=settings.groq_api_key,
+            model=settings.groq_model,
+            system=system,
+            prompt=prompt,
+        )
+
+    def _xai(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        return self._http_chat(
+            base_url="https://api.x.ai/v1",
+            api_key=settings.xai_api_key,
+            model=settings.xai_model,
+            system=system,
+            prompt=prompt,
+        )
+
+    def _openrouter(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        return self._http_chat(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.openrouter_api_key,
+            model=settings.openrouter_model,
+            system=system,
+            prompt=prompt,
+            extra_headers={
+                "HTTP-Referer": "https://github.com/orbit-agent/orbit",
+                "X-Title": "ORBIT Agentic System",
+            },
+        )
+
+    def _openai_compatible(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        return self._http_chat(
+            base_url=settings.openai_base_url,
+            api_key=settings.openai_api_key,
+            model=settings.openai_model or "default",
+            system=system,
+            prompt=prompt,
+        )
+
     def _anthropic(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
         import anthropic  # imported lazily so the package stays optional
 
@@ -133,7 +253,22 @@ class LLMClient:
         usage: dict[str, int] = {}
 
         try:
-            if provider == "anthropic":
+            if provider == "gemini":
+                text, usage = self._gemini(system, prompt)
+                model = settings.gemini_model
+            elif provider == "groq":
+                text, usage = self._groq(system, prompt)
+                model = settings.groq_model
+            elif provider == "xai":
+                text, usage = self._xai(system, prompt)
+                model = settings.xai_model
+            elif provider == "openrouter":
+                text, usage = self._openrouter(system, prompt)
+                model = settings.openrouter_model
+            elif provider == "openai_compatible":
+                text, usage = self._openai_compatible(system, prompt)
+                model = settings.openai_model or "custom-model"
+            elif provider == "anthropic":
                 text, usage = self._anthropic(system, prompt)
                 model = settings.anthropic_model
             elif provider == "openai":
