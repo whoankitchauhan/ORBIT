@@ -75,6 +75,8 @@ class LLMClient:
     # ----------------------------------------------------------- backends
 
     def _gemini(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        import time as _time
+        import urllib.error
         import urllib.request
 
         model = settings.gemini_model
@@ -92,13 +94,30 @@ class LLMClient:
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
 
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "User-Agent": "ORBIT/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=settings.tool_timeout_seconds) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        body_bytes = json.dumps(payload).encode("utf-8")
+
+        for attempt in range(3):  # up to 3 attempts
+            req = urllib.request.Request(
+                url,
+                data=body_bytes,
+                headers={"Content-Type": "application/json", "User-Agent": "ORBIT/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=settings.tool_timeout_seconds) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                break  # success
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 2:
+                    # Rate limited — parse retry-after if available, else back off
+                    err_body = e.read().decode("utf-8", errors="ignore")
+                    wait = 15  # default wait
+                    import re as _re
+                    m = _re.search(r"retry in ([0-9.]+)s", err_body)
+                    if m:
+                        wait = min(30, float(m.group(1)) + 1)
+                    _time.sleep(wait)
+                    continue
+                raise  # re-raise on non-429 or after all retries
 
         candidates = data.get("candidates", [])
         if not candidates:
@@ -111,6 +130,7 @@ class LLMClient:
             "output_tokens": usage_meta.get("candidatesTokenCount", 0),
         }
         return text, usage
+
 
     def _http_chat(
         self,
@@ -151,6 +171,39 @@ class LLMClient:
         usage = {
             "input_tokens": data.get("usage", {}).get("prompt_tokens", 0),
             "output_tokens": data.get("usage", {}).get("completion_tokens", 0),
+        }
+        return text, usage
+
+    def _ollama(self, system: str, prompt: str) -> tuple[str, dict[str, int]]:
+        """Call local Ollama instance (gemma3:4b, llama3, etc.) completely offline."""
+        import urllib.request
+
+        url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
+        body = {
+            "model": settings.ollama_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": settings.llm_temperature,
+                "num_predict": settings.llm_max_tokens,
+            },
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "ORBIT/1.0"},
+        )
+        timeout = max(45.0, settings.tool_timeout_seconds)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        text = data.get("message", {}).get("content") or ""
+        usage = {
+            "input_tokens": data.get("prompt_eval_count", 0),
+            "output_tokens": data.get("eval_count", 0),
         }
         return text, usage
 
@@ -253,7 +306,10 @@ class LLMClient:
         usage: dict[str, int] = {}
 
         try:
-            if provider == "gemini":
+            if provider == "ollama":
+                text, usage = self._ollama(system, prompt)
+                model = f"ollama/{settings.ollama_model}"
+            elif provider == "gemini":
                 text, usage = self._gemini(system, prompt)
                 model = settings.gemini_model
             elif provider == "groq":
@@ -279,25 +335,31 @@ class LLMClient:
                 model = "orbit-offline-planner"
         except Exception as exc:  # network down, bad key, rate limit
             # Try alternate real providers before falling back to the offline planner.
-            # Falling back to simulated mode silently is the most dangerous failure
-            # mode: it produces plausible-looking but heuristic output.
             _primary_exc = exc
             _fell_back_to_real = False
 
-            # If primary was Gemini but Groq key is present, try Groq
-            if provider == "gemini" and settings.groq_api_key:
+            # If primary was not Ollama and Ollama is running, fall back to local model immediately
+            if provider != "ollama" and settings.has_ollama:
                 try:
-                    text, usage = self._groq(system, prompt)
-                    provider, model = "groq", settings.groq_model
+                    text, usage = self._ollama(system, prompt)
+                    provider, model = "ollama", f"ollama/{settings.ollama_model}"
                     _fell_back_to_real = True
                 except Exception:
                     pass
 
-            # If still failed and Gemini key is available, try other models
-            if not _fell_back_to_real and provider == "groq" and settings.gemini_api_key:
+            # If still failed, try other keys
+            if not _fell_back_to_real and provider != "gemini" and settings.gemini_api_key:
                 try:
                     text, usage = self._gemini(system, prompt)
                     provider, model = "gemini", settings.gemini_model
+                    _fell_back_to_real = True
+                except Exception:
+                    pass
+
+            if not _fell_back_to_real and provider != "groq" and settings.groq_api_key:
+                try:
+                    text, usage = self._groq(system, prompt)
+                    provider, model = "groq", settings.groq_model
                     _fell_back_to_real = True
                 except Exception:
                     pass
