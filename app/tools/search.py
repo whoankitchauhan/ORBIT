@@ -55,36 +55,50 @@ def recall_past_tasks(objective: str, k: int = 3) -> list[dict[str, Any]]:
     return [r.to_dict() for r in recall_similar_tasks(objective, k=int(k))]
 
 
-@registry.tool(
-    name="web_search",
-    description="Public web search. Disabled unless ALLOW_LIVE_WEB_SEARCH is enabled.",
-    risk="medium",
-    allowed_agents=("research",),
-    parameters={"query": "str", "max_results": "int = 5"},
-    required=("query",),
-)
-def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
-    """Query DuckDuckGo's instant-answer endpoint.
+def _tavily_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    """Execute a web search using Tavily AI Search (free tier: 1000 searches/month)."""
+    url = "https://api.tavily.com/search"
+    body = {
+        "api_key": settings.tavily_api_key,
+        "query": query,
+        "search_depth": "basic",
+        "max_results": int(max_results),
+        "include_answer": True,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "ORBIT/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=settings.tool_timeout_seconds) as response:
+        payload = json.loads(response.read().decode("utf-8"))
 
-    Off by default: an offline lab machine would otherwise stall on a network
-    timeout in the middle of a live demonstration.
-    """
-    if not settings.allow_live_web_search:
-        return {
-            "enabled": False,
-            "note": "Live web search is off. Set ALLOW_LIVE_WEB_SEARCH=true to enable it.",
-            "results": [],
-        }
+    results: list[dict[str, str]] = []
+    for item in payload.get("results", []):
+        results.append(
+            {
+                "title": item.get("title", ""),
+                "snippet": item.get("content", ""),
+                "url": item.get("url", ""),
+            }
+        )
+    return {
+        "enabled": True,
+        "provider": "tavily",
+        "query": query,
+        "answer": payload.get("answer", ""),
+        "results": results,
+    }
 
+
+def _duckduckgo_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    """Fallback search using DuckDuckGo."""
     url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "no_html": 1, "skip_disambig": 1}
     )
-    try:
-        request = urllib.request.Request(url, headers={"User-Agent": "ORBIT/1.0"})
-        with urllib.request.urlopen(request, timeout=settings.tool_timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        return {"enabled": True, "error": f"{type(exc).__name__}: {exc}", "results": []}
+    request = urllib.request.Request(url, headers={"User-Agent": "ORBIT/1.0"})
+    with urllib.request.urlopen(request, timeout=settings.tool_timeout_seconds) as response:
+        payload = json.loads(response.read().decode("utf-8"))
 
     results: list[dict[str, str]] = []
     if payload.get("AbstractText"):
@@ -106,4 +120,48 @@ def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
                     "url": topic.get("FirstURL", ""),
                 }
             )
-    return {"enabled": True, "query": query, "results": results}
+    return {"enabled": True, "provider": "duckduckgo", "query": query, "results": results}
+
+
+@registry.tool(
+    name="web_search",
+    description="Public web search via Tavily (if configured) or DuckDuckGo.",
+    risk="medium",
+    allowed_agents=("research",),
+    parameters={"query": "str", "max_results": "int = 5"},
+    required=("query",),
+)
+def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    """Live web search using Tavily API (free tier) or DuckDuckGo fallback.
+
+    Off by default unless TAVILY_API_KEY is provided or ALLOW_LIVE_WEB_SEARCH=true.
+    """
+    is_live = bool(settings.tavily_api_key) or settings.allow_live_web_search
+    if not is_live:
+        return {
+            "enabled": False,
+            "note": "Live web search is off. Set TAVILY_API_KEY or ALLOW_LIVE_WEB_SEARCH=true to enable it.",
+            "results": [],
+        }
+
+    # Try Tavily first if key is present
+    if settings.tavily_api_key:
+        try:
+            return _tavily_search(query, max_results=max_results)
+        except Exception as exc:
+            # Fall back to DuckDuckGo on Tavily failure
+            if settings.allow_live_web_search:
+                try:
+                    res = _duckduckgo_search(query, max_results=max_results)
+                    res["note"] = f"Tavily failed ({exc}), fell back to DuckDuckGo"
+                    return res
+                except Exception:
+                    pass
+            return {"enabled": True, "provider": "tavily", "error": f"Tavily error: {exc}", "results": []}
+
+    # DuckDuckGo fallback
+    try:
+        return _duckduckgo_search(query, max_results=max_results)
+    except Exception as exc:
+        return {"enabled": True, "provider": "duckduckgo", "error": f"{type(exc).__name__}: {exc}", "results": []}
+
