@@ -150,14 +150,34 @@ def _duckduckgo_search(query: str, max_results: int = 5) -> dict[str, Any]:
     # This handles comparison queries like "Who is better Dhoni or Kohli?"
     if not results:
         import re as _re
-        candidates = _re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', query)
-        # Filter common English words that happen to be capitalized
-        _skip = {"Who", "What", "Where", "When", "Which", "How", "Why", "Is", "Are", "The", "A", "An"}
-        names = [c for c in candidates if c not in _skip][:3]
-        for name in names:
+        # Match multi-word proper nouns (e.g. "MS Dhoni", "Virat Kohli")
+        # Also match two-letter abbreviations followed by a capitalized name
+        candidates_multi = _re.findall(
+            r'\b([A-Z]{1,2}\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b',
+            query
+        )
+        # Also grab single-token names (e.g. "Dhoni", "Kohli") as fallback
+        candidates_single = _re.findall(r'\b([A-Z][a-z]{3,})\b', query)
+        # Filter common English words
+        _skip = {"Who", "What", "Where", "When", "Which", "How", "Why", "Is", "Are",
+                 "The", "A", "An", "Better", "Best", "Good", "Great"}
+        names: list[str] = []
+        for c in candidates_multi + candidates_single:
+            if c not in _skip and c not in names:
+                names.append(c)
+
+        for name in names[:4]:
             hit = _ddg_entity_search(name)
             if hit:
                 results.append(hit)
+            # If single-word name failed, try prepending common cricket country abbrevs
+            elif " " not in name:
+                for prefix in ("MS", "Virat", "Rohit"):
+                    full = f"{prefix} {name}"
+                    hit2 = _ddg_entity_search(full)
+                    if hit2:
+                        results.append(hit2)
+                        break
 
     return {
         "enabled": True,
