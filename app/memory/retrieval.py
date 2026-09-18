@@ -70,13 +70,20 @@ def build_rag_prompt(question: str, records: list[MemoryRecord]) -> str:
 
 
 def remember_task_outcome(state: Any) -> str | None:
-    """Write a finished task into long-term memory as an episode."""
+    """Write a finished task into long-term memory as an episode.
+
+    We store only a short objective+outcome line — NOT the full final answer.
+    Storing the full verbose answer caused episodic memory to pollute future
+    queries: the hashed-vector embedder picks up tokens from old answers and
+    returns them as 'relevant context' even when the topic is completely different.
+    """
     if not state.final_answer:
         return None
+    # Concise episode: objective + final confidence verdict, max 300 chars of answer
+    short_answer = state.final_answer[:300].split("\n")[0]  # first line only
     summary = (
-        f"Task {state.task_id}: {state.objective}\n"
-        f"Outcome ({state.status}, confidence {state.confidence:.0%}): "
-        f"{state.final_answer[:600]}"
+        f"[Episode] {state.objective} "
+        f"({state.status}, confidence {state.confidence:.0%}): {short_answer}"
     )
     return get_memory().add(
         summary,
@@ -87,10 +94,18 @@ def remember_task_outcome(state: Any) -> str | None:
             "status": state.status,
             "risk": state.risk,
             "user_id": state.user_id,
+            "objective": state.objective[:200],
         },
     )
 
 
 def recall_similar_tasks(objective: str, k: int = 3) -> list[MemoryRecord]:
-    """Find earlier tasks resembling this one, for the Supervisor's context."""
-    return get_memory().search(objective, k=k, where={"kind": "episode"})
+    """Find earlier tasks resembling this one, for the Supervisor's context.
+
+    Only returns episodes with a score above 0.25 so unrelated prior tasks
+    don't pollute the current plan with irrelevant context.
+    """
+    results = get_memory().search(objective, k=k * 2, where={"kind": "episode"})
+    # Filter to episodes that are actually topically similar
+    return [r for r in results if r.score > 0.25][:k]
+

@@ -134,34 +134,27 @@ def _duckduckgo_search(query: str, max_results: int = 5) -> dict[str, Any]:
 def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
     """Live web search using Tavily API (free tier) or DuckDuckGo fallback.
 
-    Off by default unless TAVILY_API_KEY is provided or ALLOW_LIVE_WEB_SEARCH=true.
+    DuckDuckGo requires no API key and is always available as a baseline.
+    Tavily provides richer results when TAVILY_API_KEY is set.
     """
-    is_live = bool(settings.tavily_api_key) or settings.allow_live_web_search
-    if not is_live:
-        return {
-            "enabled": False,
-            "note": "Live web search is off. Set TAVILY_API_KEY or ALLOW_LIVE_WEB_SEARCH=true to enable it.",
-            "results": [],
-        }
-
     # Try Tavily first if key is present
     if settings.tavily_api_key:
         try:
             return _tavily_search(query, max_results=max_results)
         except Exception as exc:
-            # Fall back to DuckDuckGo on Tavily failure
-            if settings.allow_live_web_search:
-                try:
-                    res = _duckduckgo_search(query, max_results=max_results)
-                    res["note"] = f"Tavily failed ({exc}), fell back to DuckDuckGo"
-                    return res
-                except Exception:
-                    pass
+            try:
+                res = _duckduckgo_search(query, max_results=max_results)
+                res["note"] = f"Tavily failed ({exc}), fell back to DuckDuckGo"
+                return res
+            except Exception:
+                pass
             return {"enabled": True, "provider": "tavily", "error": f"Tavily error: {exc}", "results": []}
 
-    # DuckDuckGo fallback
+    # DuckDuckGo — always available, no key needed
     try:
         return _duckduckgo_search(query, max_results=max_results)
     except Exception as exc:
         return {"enabled": True, "provider": "duckduckgo", "error": f"{type(exc).__name__}: {exc}", "results": []}
+
+
 
