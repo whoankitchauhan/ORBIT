@@ -91,36 +91,81 @@ def _tavily_search(query: str, max_results: int = 5) -> dict[str, Any]:
     }
 
 
-def _duckduckgo_search(query: str, max_results: int = 5) -> dict[str, Any]:
-    """Fallback search using DuckDuckGo."""
+def _ddg_entity_search(name: str) -> dict[str, str] | None:
+    """Fetch a DuckDuckGo Instant Answer for a single entity name."""
     url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(
-        {"q": query, "format": "json", "no_html": 1, "skip_disambig": 1}
+        {"q": name, "format": "json", "no_html": 1, "skip_disambig": 1}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "ORBIT/1.0"})
-    with urllib.request.urlopen(request, timeout=settings.tool_timeout_seconds) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-
-    results: list[dict[str, str]] = []
-    if payload.get("AbstractText"):
-        results.append(
-            {
-                "title": payload.get("Heading", query),
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "ORBIT/1.0"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("AbstractText"):
+            return {
+                "title": payload.get("Heading", name),
                 "snippet": payload["AbstractText"],
                 "url": payload.get("AbstractURL", ""),
             }
-        )
-    for topic in payload.get("RelatedTopics", []):
-        if len(results) >= int(max_results):
-            break
-        if isinstance(topic, dict) and topic.get("Text"):
-            results.append(
-                {
+    except Exception:
+        pass
+    return None
+
+
+def _duckduckgo_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    """DuckDuckGo search with entity extraction for comparison queries.
+
+    The DDG Instant Answer API only works well for direct entity names, not
+    comparison phrases like "Dhoni vs Kohli". We detect named entities in the
+    query and fetch them individually, then combine the results.
+    """
+    results: list[dict[str, str]] = []
+
+    # First, try the query as-is
+    url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(
+        {"q": query, "format": "json", "no_html": 1, "skip_disambig": 1}
+    )
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "ORBIT/1.0"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("AbstractText"):
+            results.append({
+                "title": payload.get("Heading", query),
+                "snippet": payload["AbstractText"],
+                "url": payload.get("AbstractURL", ""),
+            })
+        for topic in payload.get("RelatedTopics", []):
+            if len(results) >= int(max_results):
+                break
+            if isinstance(topic, dict) and topic.get("Text"):
+                results.append({
                     "title": topic.get("Text", "")[:80],
                     "snippet": topic.get("Text", ""),
                     "url": topic.get("FirstURL", ""),
-                }
-            )
-    return {"enabled": True, "provider": "duckduckgo", "query": query, "results": results}
+                })
+    except Exception:
+        pass
+
+    # If we got nothing, extract proper nouns (capitalized words) and search individually.
+    # This handles comparison queries like "Who is better Dhoni or Kohli?"
+    if not results:
+        import re as _re
+        candidates = _re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', query)
+        # Filter common English words that happen to be capitalized
+        _skip = {"Who", "What", "Where", "When", "Which", "How", "Why", "Is", "Are", "The", "A", "An"}
+        names = [c for c in candidates if c not in _skip][:3]
+        for name in names:
+            hit = _ddg_entity_search(name)
+            if hit:
+                results.append(hit)
+
+    return {
+        "enabled": True,
+        "provider": "duckduckgo",
+        "query": query,
+        "results": results,
+    }
+
 
 
 @registry.tool(
