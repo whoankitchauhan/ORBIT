@@ -108,7 +108,8 @@ with st.sidebar:
         st.caption(
             "No model API key is set, so reasoning comes from the built-in offline "
             "planner. Every agent, tool, memory and approval path still runs. Add "
-            "`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` to `.env` for live reasoning."
+            "a free key (`GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`) "
+            "to `.env` for live reasoning."
         )
 
     st.divider()
