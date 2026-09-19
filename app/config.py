@@ -151,7 +151,7 @@ class Settings:
         default_factory=lambda: int(os.getenv("MAX_SUPERVISOR_HOPS", "12"))
     )
     tool_timeout_seconds: float = field(
-        default_factory=lambda: float(os.getenv("TOOL_TIMEOUT_SECONDS", "20"))
+        default_factory=lambda: float(os.getenv("TOOL_TIMEOUT_SECONDS", "60"))
     )
     allow_live_web_search: bool = field(default_factory=lambda: _flag("ALLOW_LIVE_WEB_SEARCH", False))
 
