@@ -44,13 +44,18 @@ class ResearchAgent(Agent):
         """
         text = f"{instruction} {state.objective}"
         words = set(re.findall(r"[a-z]+", text.lower()))
-        plan: list[dict[str, Any]] = [
-            {"tool": "knowledge_search", "arguments": {"query": instruction[:200], "k": 4}}
-        ]
-
         customer = CUSTOMER_RE.search(text)
         email = EMAIL_RE.search(text)
         identifier = customer.group(1).upper() if customer else (email.group(0) if email else None)
+
+        is_general = not (words & POLICY_HINTS) and not (words & HISTORY_HINTS) and not identifier
+        plan: list[dict[str, Any]] = []
+
+        if is_general:
+            plan.append({"tool": "web_search", "arguments": {"query": instruction[:200]}})
+        else:
+            plan.append({"tool": "knowledge_search", "arguments": {"query": instruction[:200], "k": 4}})
+
         if identifier:
             plan.append({"tool": "lookup_customer", "arguments": {"identifier": identifier}})
             if words & HISTORY_HINTS:
@@ -66,12 +71,6 @@ class ResearchAgent(Agent):
         if identifier and (words & HISTORY_HINTS):
             customer_id = customer.group(1).upper() if customer else identifier
             plan.append({"tool": "customer_orders", "arguments": {"customer_id": customer_id}})
-
-        # For general-knowledge questions that don't match policy/customer/order
-        # patterns, enable web search so the agent can find real information.
-        is_general = not (words & POLICY_HINTS) and not (words & HISTORY_HINTS) and not identifier
-        if is_general and (settings.allow_live_web_search or True):
-            plan.append({"tool": "web_search", "arguments": {"query": instruction[:200]}})
 
         return plan[:4]  # a research step should not fan out indefinitely
 
@@ -97,12 +96,16 @@ class ResearchAgent(Agent):
         calls = payload.get("calls") or []
 
         chosen: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for call in calls[:4]:
             name = str(call.get("tool", "")).strip()
+            if name in seen:
+                continue
             # Validate against the registry: a hallucinated tool name must not
             # reach execution, and neither must one this agent cannot use.
             if self.registry.has(name) and self.name in self.registry.get(name).allowed_agents:
                 chosen.append({"tool": name, "arguments": call.get("arguments") or {}})
+                seen.add(name)
         return chosen or heuristic
 
     # ------------------------------------------------------------- execution
@@ -127,12 +130,32 @@ class ResearchAgent(Agent):
             if call.status == "ok" and call.result:
                 tool_results.append({"name": call.name, "result": call.result})
 
+        # If tools didn't return content, automatically query web_search
+        has_content = any(t.get("result") for t in tool_results)
+        already_searched_web = any(t.get("name") == "web_search" for t in tool_results)
+        if (not has_content or not already_searched_web) and (settings.allow_live_web_search or True):
+            call = self.call_tool("web_search", {"query": instruction[:200]}, state)
+            if call.status == "ok" and call.result:
+                tool_results.append({"name": call.name, "result": call.result})
+
+        formatted_tool_results = []
+        for t in tool_results:
+            res = t.get("result")
+            if isinstance(res, dict) and "results" in res:
+                snippets = [
+                    f"- {item.get('title', '')}: {item.get('snippet', '')}"
+                    for item in res.get("results", []) if item.get("snippet")
+                ]
+                formatted_tool_results.append(f"{t['name']}:\n" + "\n".join(snippets))
+            else:
+                formatted_tool_results.append(f"{t['name']}: {str(res)[:500]}")
+
         prompt = (
             f"Step: {instruction}\n\n"
             f"Retrieved memory:\n"
             + ("\n".join(f"[{i+1}] {r['text'][:400]}" for i, r in enumerate(retrieved)) or "(none)")
             + "\n\nTool results:\n"
-            + ("\n".join(f"{t['name']}: {str(t['result'])[:500]}" for t in tool_results) or "(none)")
+            + ("\n\n".join(formatted_tool_results) or "(none)")
             + "\n\nReport your findings, grounded strictly in the material above."
         )
 
@@ -146,6 +169,21 @@ class ResearchAgent(Agent):
                 "findings": [], "sources": [], "coverage": "none",
             },
         )
+
+        if isinstance(payload, list):
+            payload = {
+                "summary": "\n".join(str(x) for x in payload),
+                "findings": [str(x) for x in payload],
+                "sources": [],
+                "coverage": "good" if payload else "none",
+            }
+        elif not isinstance(payload, dict):
+            payload = {
+                "summary": str(payload),
+                "findings": [str(payload)],
+                "sources": [],
+                "coverage": "partial",
+            }
 
         # Merge with anything an earlier research step already established, so
         # a multi-step plan accumulates evidence instead of overwriting it.

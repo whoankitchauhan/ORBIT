@@ -168,7 +168,10 @@ class EmbeddedVectorIndex:
             # catches paraphrase, the lexical part anchors rare exact terms
             # like an order id that hashing would otherwise dilute.
             score = 0.65 * dense + 0.35 * min(1.0, lexical / 3.0)
-            if score <= 0.01:
+            # Filter out completely unrelated documents with zero word overlap and low dense similarity
+            if not overlap and dense < 0.38:
+                continue
+            if score < 0.18:
                 continue
             results.append(
                 MemoryRecord(

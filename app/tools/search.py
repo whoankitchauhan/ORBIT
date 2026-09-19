@@ -170,9 +170,9 @@ def _duckduckgo_search(query: str, max_results: int = 5) -> dict[str, Any]:
             hit = _ddg_entity_search(name)
             if hit:
                 results.append(hit)
-            # If single-word name failed, try prepending common cricket country abbrevs
+            # If single-word name failed, try prepending common sports/cricket first names
             elif " " not in name:
-                for prefix in ("MS", "Virat", "Rohit"):
+                for prefix in ("MS", "Virat", "Rohit", "Sachin", "Sourav", "Rahul"):
                     full = f"{prefix} {name}"
                     hit2 = _ddg_entity_search(full)
                     if hit2:

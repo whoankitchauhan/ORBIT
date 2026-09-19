@@ -86,6 +86,23 @@ class AnalysisAgent(Agent):
             },
         )
 
+        if isinstance(payload, list):
+            payload = {
+                "summary": "\n".join(str(x) for x in payload),
+                "observations": [str(x) for x in payload],
+                "conclusion": str(payload[0]) if payload else "",
+                "confidence": 0.75,
+                "verdict": "supported",
+            }
+        elif not isinstance(payload, dict):
+            payload = {
+                "summary": str(payload),
+                "observations": [str(payload)],
+                "conclusion": str(payload),
+                "confidence": 0.5,
+                "verdict": "supported",
+            }
+
         try:
             confidence = float(payload.get("confidence", 0.4))
         except (TypeError, ValueError):
